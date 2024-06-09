@@ -1,43 +1,52 @@
+from google.cloud import secretmanager
+import os
+import json
 from flask import Flask, jsonify, request
 from google.cloud import storage
-import json
-import os
 from dotenv import load_dotenv
 from geopy.distance import geodesic
 
 app = Flask(__name__)
 
-def load_data_from_gcs(bucket_name, file_name):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(file_name)
-    data = blob.download_as_text()
-    return json.loads(data)
+# Function to get secret from Secret Manager
+def get_secret(secret_id):
+    client = secretmanager.SecretManagerServiceClient()
+    project_id = os.getenv('GOOGLE_CLOUD_PROJECT')
+    name = f"projects/609904973527/secrets/service-account-bucket/versions/1"
+    response = client.access_secret_version(request={"name": name})
+    secret_string = response.payload.data.decode("UTF-8")
+    return secret_string
 
+# Replace with your secret ID
+SERVICE_ACCOUNT_KEY = get_secret("service-account-key")
+
+# Initialize Google Cloud Storage client
+storage_client = storage.Client.from_service_account_info(json.loads(SERVICE_ACCOUNT_KEY))
+
+# Function to load data from Google Cloud Storage
+def load_data_from_gcs(bucket_name, file_name):
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_name)
+    data = json.loads(blob.download_as_string())
+    return data
+
+# Function to save data to Google Cloud Storage
 def save_data_to_gcs(bucket_name, file_name, data):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
+    bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(file_name)
     blob.upload_from_string(json.dumps(data))
 
-def download_service_account_key(bucket_name, file_name, local_path):
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(file_name)
-    blob.download_to_filename(local_path)
-
+# Load environment variables
 load_dotenv()
 
-SERVICE_ACCOUNT_KEY_PATH = "/tmp/sehatin-capstone-c241-9dd097cc8db3.json"
+# Define constants
 BUCKET_NAME = os.getenv('BUCKET_NAME')
 FILE_NAME = os.getenv('FILE_NAME')
-SERVICE_ACCOUNT_FILE_NAME = "sehatin-capstone-c241-9dd097cc8db3.json"
-download_service_account_key(BUCKET_NAME, SERVICE_ACCOUNT_FILE_NAME, SERVICE_ACCOUNT_KEY_PATH)
 
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = SERVICE_ACCOUNT_KEY_PATH
-
+# Load data from Google Cloud Storage
 data = load_data_from_gcs(BUCKET_NAME, FILE_NAME)
 
+# Define Flask routes
 @app.route('/toko/dekat', methods=['GET'])
 def get_nearby_toko():
     user_lat = request.args.get('latitude', type=float)
@@ -75,9 +84,8 @@ def update_toko(index):
         return jsonify({'error': 'Index out of range'}), 404
     data[index] = updated_toko
     save_data_to_gcs(BUCKET_NAME, FILE_NAME, data)
-    return jsonify(updated_toko), 200, {'message': f"Berhasil memperbaharui toko {updated_toko['nama_toko']}"}
+    return jsonify(updated_toko), 200, {'message': f"Berhasil memperbaharui toko {updated_toko['nama_toko']}"} 
 
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get("PORT", 8080))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=True)
